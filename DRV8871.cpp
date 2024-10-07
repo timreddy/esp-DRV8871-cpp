@@ -161,7 +161,6 @@ void DRV8871::reverse(void) {
  * 
  */
 void DRV8871::forward(void) {
-    ESP_LOGI(TAG, "Forward at %d", (int)(100*this->duty_cycle));
     ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
                       this->motor_generator_a,
                       MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
@@ -188,4 +187,24 @@ void DRV8871::set_duty_cycle(double duty_cycle) {
     if(duty_cycle > 1) { duty_cycle = 1; }
     this->duty_cycle = duty_cycle;
     ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(motor_comparator, (unsigned int)((1.0-this->duty_cycle)*(800.0))));
+}
+
+/**
+ * @brief Set the speed (and direction) of the motor
+ * 
+ * @param speed Signed int8 where:
+ *      0 indicates stop
+ *      positive values indicate forward, and duty cycle is speed/INT8_MAX
+ *      negative values indicate reverse, and duty cycle is speed/INT8_MIN
+ */
+void DRV8871::setSpeed(int8_t speed) {
+    if(speed == 0) { 
+        this->brake();
+    } else if(speed > 0) {
+        this->forward();
+        this->set_duty_cycle((double)(speed / (double)INT8_MAX));
+    } else {
+        this->reverse();
+        this->set_duty_cycle((double)(speed / (double)INT8_MIN));
+    }
 }

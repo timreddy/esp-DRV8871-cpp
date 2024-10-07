@@ -39,4 +39,5 @@ class DRV8871 {
         void forward(void);
         void reverse(void);
         void set_duty_cycle(double duty_cycle);
+        void setSpeed(int8_t speed);
 };
