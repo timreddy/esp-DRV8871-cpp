@@ -1,41 +1,43 @@
 #include <stdio.h>
 #include "esp_err.h"
+#include "esp_log.h"
 #include "driver/mcpwm_prelude.h"
 #include "DRV8871.h"
 
-DRV8871::DRV8871(void) {
+#include "driver/gpio.h"
+
+DRV8871::DRV8871(gpio_num_t pin1, gpio_num_t pin2) {
+    this->pin1 = pin1;
+    this->pin2 = pin2;
+
+    ESP_LOGI(DRV8871::TAG, "Initializing motor");
     this->duty_cycle = 0.0;
-    this->on = false;
-    this->direction = 1;   // 0 = reverse, 1 = forward
-    this->brake_mode = 0;  // 0 = coast, 1 = brake
 
     this->init_timer();
     this->init_operator();
     ESP_ERROR_CHECK(mcpwm_operator_connect_timer(this->motor_operator, this->motor_timer));
 
     this->init_comparator();
+    this->init_generators();
 
-    // This all should be moved to functions to set the direction and duty cycle.
-    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
-                      this->motor_generator,
-                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
-    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
-                      this->motor_generator,
-                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_LOW)));
     ESP_ERROR_CHECK(mcpwm_generator_set_action_on_brake_event(
-                      this->motor_generator,
+                      this->motor_generator_a,
                       MCPWM_GEN_BRAKE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_OPER_BRAKE_MODE_OST, MCPWM_GEN_ACTION_LOW)));
 
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_brake_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_BRAKE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_OPER_BRAKE_MODE_OST, MCPWM_GEN_ACTION_LOW)));
+
+    this->brake();
+
     mcpwm_timer_enable(motor_timer);
-
-
     mcpwm_timer_start_stop(motor_timer, MCPWM_TIMER_START_NO_STOP);
 }
 
-DRV8871::DRV8871(gpio_num_t pin1, gpio_num_t pin2) : DRV8871() {
-    this->set_pins(pin1, pin2);
-}
-
+/**
+ * @brief Initialize the comparator used to set the duty cycle
+ * 
+ */
 void DRV8871::init_comparator(void) {
     mcpwm_comparator_config_t motor_comparator_config;
     motor_comparator_config.intr_priority = 0;
@@ -43,6 +45,10 @@ void DRV8871::init_comparator(void) {
     mcpwm_comparator_set_compare_value(this->motor_comparator, 0);
 }
 
+/**
+ * @brief Initialize the main timer
+ * 
+ */
 void DRV8871::init_timer(void) {
     mcpwm_timer_config_t motor_timer_config;
     motor_timer_config.clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT;
@@ -54,6 +60,10 @@ void DRV8871::init_timer(void) {
     ESP_ERROR_CHECK(mcpwm_new_timer(&motor_timer_config, &(this->motor_timer)));
 }
 
+/**
+ * @brief Initialize the main operator
+ * 
+ */
 void DRV8871::init_operator(void) {
     mcpwm_operator_config_t motor_operator_config;
     motor_operator_config.group_id = 0;
@@ -62,56 +72,116 @@ void DRV8871::init_operator(void) {
 }
 
 /**
- * @brief Set the gpio pins. This needs to be done before initializing the mcpwm controller.
+ * @brief Initialize the main operator
  * 
- * @param pin1 
- * @param pin2 
  */
-void DRV8871::set_pins(gpio_num_t pin1, gpio_num_t pin2) {
-    this->pin1 = pin1;
-    this->pin2 = pin2;
+void DRV8871::init_generators(void) {
+    mcpwm_generator_config_t motor_generator_config_a;
+    motor_generator_config_a.gen_gpio_num = this->pin1;
+    motor_generator_config_a.flags.invert_pwm = false;
+    motor_generator_config_a.flags.io_loop_back = false;
+    motor_generator_config_a.flags.io_od_mode = false;
+    motor_generator_config_a.flags.pull_down = false;
+    motor_generator_config_a.flags.pull_up = false;
+    mcpwm_new_generator(this->motor_operator, &motor_generator_config_a, &(this->motor_generator_a));
 
-    ESP_ERROR_CHECK(gpio_reset_pin(this->pin1));
-    ESP_ERROR_CHECK(gpio_set_direction(this->pin1,GPIO_MODE_OUTPUT));
-    ESP_ERROR_CHECK(gpio_set_pull_mode(this->pin1, GPIO_PULLDOWN_ONLY));
-    ESP_ERROR_CHECK(gpio_set_level(this->pin1,0));
-
-    ESP_ERROR_CHECK(gpio_reset_pin(this->pin2));
-    ESP_ERROR_CHECK(gpio_set_direction(this->pin2,GPIO_MODE_OUTPUT));
-    ESP_ERROR_CHECK(gpio_set_pull_mode(this->pin2, GPIO_PULLDOWN_ONLY));
-    ESP_ERROR_CHECK(gpio_set_level(this->pin2,0));
-}
-
-void DRV8871::start(void) {
-    //the following line should be replaces with a proper mcpwm output
-    ESP_ERROR_CHECK(gpio_set_level(this->pin1,1));
-
-    ESP_ERROR_CHECK(mcpwm_timer_start_stop(this->motor_timer, MCPWM_TIMER_START_NO_STOP));
-    this->on = true;
-}
-
-void DRV8871::stop(void) {
-    ESP_ERROR_CHECK(mcpwm_timer_start_stop(this->motor_timer, MCPWM_TIMER_STOP_FULL));
-
-    //the following two lines should be replaces with a proper mcpwm output
-    ESP_ERROR_CHECK(gpio_set_level(this->pin1,0));
-    ESP_ERROR_CHECK(gpio_set_level(this->pin2,0));
-
-    this->on = false;
-}
-
-void DRV8871::forward(void) {
-    this->direction = 1;
-}
-
-void DRV8871::reverse(void) {
-    this->direction = 0;
+    mcpwm_generator_config_t motor_generator_config_b;
+    motor_generator_config_b.gen_gpio_num = this->pin2;
+    motor_generator_config_b.flags.invert_pwm = false;
+    motor_generator_config_b.flags.io_loop_back = false;
+    motor_generator_config_b.flags.io_od_mode = false;
+    motor_generator_config_b.flags.pull_down = false;
+    motor_generator_config_b.flags.pull_up = false;
+    mcpwm_new_generator(this->motor_operator, &motor_generator_config_b, &(this->motor_generator_b));
 }
 
 /**
- * @brief Sets the duty cycle for the motor pwm signal. Range allowed is 0-100. Values over 100 are capped at 100
+ * @brief Stop the motor by holding in the brake state
  * 
- * @param duty_cycle Duty cycle level to set, as a percent. E.g. 0 = 0% (stopped) and 100 = 100% (full speed). Values over 100 are capped. 
+ */
+void DRV8871::brake(void) {
+    ESP_LOGI(DRV8871::TAG, "Setting brake mode");
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_KEEP))); 
+
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_KEEP))); 
+}
+
+/**
+ * @brief Stop the motor by holding in the brake state
+ * 
+ */
+void DRV8871::coast(void) {
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_LOW)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_KEEP))); 
+
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_LOW)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_KEEP))); 
+}
+
+/**
+ * @brief Set the reverse direction by oscillating pin 1 and holding pin 2 high.
+ * 
+ */
+void DRV8871::reverse(void) {
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_LOW))); 
+
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_KEEP))); 
+}
+
+/**
+ * @brief Set the forward direction by holding pin 1 high and oscillating pin 2
+ * 
+ */
+void DRV8871::forward(void) {
+    ESP_LOGI(TAG, "Forward at %d", (int)(100*this->duty_cycle));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_a,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_HIGH))); 
+
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(
+                      this->motor_generator_b,
+                      MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, motor_comparator, MCPWM_GEN_ACTION_LOW))); 
+}
+
+/**
+ * @brief Sets the duty cycle for the motor pwm signal. Range allowed is 0-1. May change this later to set speed and direction 
+ * in a single command.
+ * 
+ * @param duty_cycle Duty cycle level to set, as a fraction between 0 and 1.
  */
 void DRV8871::set_duty_cycle(double duty_cycle) {
     if(duty_cycle < 0) { duty_cycle = 0; }

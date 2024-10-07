@@ -5,6 +5,9 @@
 
 class DRV8871 {
     private:
+        
+        static constexpr char* TAG = "DRV8871";
+
         gpio_num_t  pin1, pin2;
 
         double duty_cycle;  // range [0.0 - 1.0]
@@ -16,22 +19,22 @@ class DRV8871 {
         mcpwm_timer_handle_t    motor_timer;
         mcpwm_oper_handle_t     motor_operator;
         mcpwm_cmpr_handle_t     motor_comparator;
-        mcpwm_gen_handle_t      motor_generator;
+
+        mcpwm_gen_handle_t      motor_generator_a;
+        mcpwm_gen_handle_t      motor_generator_b;
 
 
-        void set_pins(gpio_num_t pin1, gpio_num_t pin2);
         void init_timer(void);
         void init_operator(void);
         void init_comparator(void);
+        void init_generators(void);
 
     public:
 
-        DRV8871(void);
         DRV8871(gpio_num_t pin1, gpio_num_t pin2);
 
-
-        void start(void);
-        void stop(void);
+        void brake(void);
+        void coast(void);
 
         void forward(void);
         void reverse(void);
